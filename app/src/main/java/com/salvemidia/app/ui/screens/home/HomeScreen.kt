@@ -5,19 +5,12 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.os.Build
-import android.os.Handler
-import android.os.Looper
-import android.net.Uri
-import android.webkit.WebChromeClient
-import android.webkit.WebViewClient
-import android.webkit.WebView
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -43,13 +36,11 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.Surface
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.runtime.Composable
@@ -71,8 +62,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.Lifecycle
@@ -99,7 +89,6 @@ fun HomeScreen(navController: NavController, viewModel: HomeViewModel = viewMode
     val linkFocus = remember { FocusRequester() }
     val state by viewModel.state.collectAsState()
     var pending by remember { mutableStateOf<Pair<String, String>?>(null) }
-    var preview by remember { mutableStateOf<PreviewRequest?>(null) }
     var link by remember { mutableStateOf("") }
     var lastAutoPastedLink by remember { mutableStateOf<String?>(null) }
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -108,12 +97,12 @@ fun HomeScreen(navController: NavController, viewModel: HomeViewModel = viewMode
         val clipText = clipboard?.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()?.trim()
         if (
             link.isEmpty() &&
-            !clipText.isNullOrEmpty() &&
-            (clipText.startsWith("http://", ignoreCase = true) || clipText.startsWith("https://", ignoreCase = true)) &&
+            clipText.isValidHttpLink() &&
             clipText != lastAutoPastedLink
         ) {
             link = clipText
             lastAutoPastedLink = clipText
+            selectedTab = 1
             Toast.makeText(context, "Link colado automaticamente", Toast.LENGTH_SHORT).show()
         }
     }
@@ -133,6 +122,10 @@ fun HomeScreen(navController: NavController, viewModel: HomeViewModel = viewMode
     LaunchedEffect(Unit) {
         if (Build.VERSION.SDK_INT >= 33) permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(500)
+        readClipboard()
+    }
 
     pending?.let { (url, title) ->
         DownloadDialog(
@@ -144,17 +137,6 @@ fun HomeScreen(navController: NavController, viewModel: HomeViewModel = viewMode
                 ContextCompat.startForegroundService(context, i)
                 Toast.makeText(context, "Download iniciado", Toast.LENGTH_SHORT).show()
                 pending = null
-            }
-        )
-    }
-
-    preview?.let { request ->
-        PreviewDialog(
-            request = request,
-            onDismiss = { preview = null },
-            onDownload = {
-                pending = request.url to request.title
-                preview = null
             }
         )
     }
@@ -210,8 +192,7 @@ fun HomeScreen(navController: NavController, viewModel: HomeViewModel = viewMode
                     is HomeState.Success -> items(s.results) { r ->
                         val u = r.webpage_url ?: r.url
                         SearchResultItem(r,
-                            onDownload = { if (u != null) pending = u to (r.title ?: "Vídeo") },
-                            onPreview = { if (u != null) preview = PreviewRequest(u, r.title ?: "Vídeo", r.thumbnail, r.id) }
+                            onDownload = { if (u != null) pending = u to (r.title ?: "Vídeo") }
                         )
                     }
                     is HomeState.Error -> item { Text(s.message, color = Color.Red, modifier = Modifier.padding(16.dp)) }
@@ -240,117 +221,6 @@ fun DownloadDialog(onDismiss: () -> Unit, onChoose: (Boolean, Int) -> Unit) {
         confirmButton = {},
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar", color = TextSecondary) } }
     )
-}
-
-private data class PreviewRequest(val url: String, val title: String, val thumbnail: String? = null, val id: String? = null)
-
-@Composable
-private fun PreviewDialog(
-    request: PreviewRequest,
-    onDismiss: () -> Unit,
-    onDownload: () -> Unit
-) {
-    val context = LocalContext.current
-    val videoId = remember(request.url) {
-        Regex("(?:youtube\\.com/watch\\?[^#]*?v=|youtu\\.be/|youtube\\.com/shorts/)([A-Za-z0-9_-]+)", RegexOption.IGNORE_CASE)
-            .find(request.url)?.groupValues?.get(1)
-    }
-    var previewFailed by remember(videoId) { mutableStateOf(false) }
-    val handler = remember(videoId) { Handler(Looper.getMainLooper()) }
-    val timeout = remember(videoId) { Runnable { previewFailed = true } }
-    val webView = remember(videoId) {
-        videoId?.let { id ->
-            val failPreview = { previewFailed = true }
-            WebView(context).apply {
-                settings.javaScriptEnabled = true
-                settings.domStorageEnabled = true
-                settings.mediaPlaybackRequiresUserGesture = false
-                setBackgroundColor(android.graphics.Color.BLACK)
-                webChromeClient = WebChromeClient()
-                webViewClient = object : WebViewClient() {
-                    override fun onReceivedError(
-                        view: WebView?,
-                        errorCode: Int,
-                        description: String?,
-                        failingUrl: String?
-                    ) {
-                        handler.removeCallbacks(timeout)
-                        failPreview()
-                    }
-
-                    override fun onPageFinished(view: WebView?, url: String?) {
-                        handler.removeCallbacks(timeout)
-                    }
-                }
-                loadUrl(
-                    "https://www.youtube.com/embed/$id?playsinline=1&autoplay=1&rel=0&origin=https://www.youtube.com",
-                    mapOf("Referer" to "https://www.youtube.com")
-                )
-                handler.postDelayed(timeout, 6_000L)
-            }
-        }
-    }
-    DisposableEffect(webView) {
-        onDispose {
-            handler.removeCallbacks(timeout)
-            webView?.stopLoading()
-            webView?.loadUrl("about:blank")
-            webView?.destroy()
-        }
-    }
-
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(shape = RoundedCornerShape(16.dp), color = CardBackground) {
-            Column(Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(request.title, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp))
-                if (webView != null && !previewFailed) {
-                    AndroidView(
-                        factory = { webView },
-                        modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp))
-                    )
-                } else if (videoId != null && previewFailed) {
-                    Box(
-                        modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        AsyncImage(
-                            model = "https://i.ytimg.com/vi/$videoId/hqdefault.jpg",
-                            contentDescription = null,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
-                        )
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Button(
-                                onClick = {
-                                    context.startActivity(
-                                        Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=$videoId"))
-                                    )
-                                },
-                                shape = RoundedCornerShape(50),
-                                colors = ButtonDefaults.buttonColors(containerColor = PurpleMain)
-                            ) {
-                                Icon(Icons.Default.PlayArrow, contentDescription = "Abrir vídeo", tint = TextWhite)
-                            }
-                            Text(
-                                "Este vídeo não permite prévia aqui",
-                                color = TextWhite,
-                                modifier = Modifier.padding(top = 8.dp)
-                            )
-                        }
-                    }
-                } else {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        AsyncImage(model = request.thumbnail, contentDescription = null, modifier = Modifier.fillMaxWidth().height(180.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
-                        Text("Prévia disponível só para YouTube", color = TextSecondary, modifier = Modifier.padding(top = 8.dp))
-                    }
-                }
-                Row(Modifier.fillMaxWidth().padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onDownload, modifier = Modifier.weight(1f).height(40.dp), shape = RoundedCornerShape(12.dp), contentPadding = PaddingValues(0.dp), colors = ButtonDefaults.buttonColors(containerColor = PurpleMain)) { Text("Baixar", color = TextWhite, fontSize = 14.sp) }
-                    Button(onClick = onDismiss, modifier = Modifier.weight(1f).height(40.dp), shape = RoundedCornerShape(12.dp), contentPadding = PaddingValues(0.dp), colors = ButtonDefaults.buttonColors(containerColor = Background)) { Text("Fechar", color = TextWhite, fontSize = 14.sp) }
-                }
-            }
-        }
-    }
 }
 
 @Composable
@@ -390,6 +260,16 @@ fun LinkSection(
                     IconButton(onClick = { onLinkChange("") }) {
                         Icon(Icons.Default.Close, contentDescription = "Limpar link", tint = TextSecondary)
                     }
+                } else {
+                    val context = LocalContext.current
+                    TextButton(onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                        val copied = clipboard?.primaryClip?.takeIf { it.itemCount > 0 }
+                            ?.getItemAt(0)?.coerceToText(context)?.toString()?.trim()
+                        val validLink = copied?.takeIf { it.isValidHttpLink() }
+                        if (validLink != null) onLinkChange(validLink) else
+                            Toast.makeText(context, "Nenhum link copiado", Toast.LENGTH_SHORT).show()
+                    }) { Text("Colar", color = PurpleGradientEnd) }
                 }
             },
             modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
@@ -414,7 +294,7 @@ fun GradientButton(text: String, icon: androidx.compose.ui.graphics.vector.Image
 }
 
 @Composable
-fun SearchResultItem(result: SearchResult, onDownload: () -> Unit, onPreview: () -> Unit) {
+fun SearchResultItem(result: SearchResult, onDownload: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -427,22 +307,26 @@ fun SearchResultItem(result: SearchResult, onDownload: () -> Unit, onPreview: ()
         AsyncImage(
             model = result.thumbnail ?: result.id?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" },
             contentDescription = null,
-            modifier = Modifier.size(100.dp, 60.dp).clip(RoundedCornerShape(8.dp)).clickable(onClick = onPreview),
+            modifier = Modifier.size(120.dp, 68.dp).clip(RoundedCornerShape(12.dp)),
             contentScale = ContentScale.Crop
         )
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(result.title ?: "Sem título", color = TextWhite, fontWeight = FontWeight.Bold, maxLines = 2, fontSize = 14.sp)
+            Text(result.title ?: "Sem título", color = TextWhite, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 14.sp, modifier = Modifier.weight(1f))
             Text(formatDuration(result.duration), color = TextSecondary, fontSize = 12.sp)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            Button(onClick = onDownload, colors = ButtonDefaults.buttonColors(containerColor = PurpleMain), shape = RoundedCornerShape(8.dp), contentPadding = PaddingValues(horizontal = 8.dp)) { Text("Baixar", fontSize = 12.sp) }
-            Button(onClick = onPreview, colors = ButtonDefaults.buttonColors(containerColor = CardBackground), shape = RoundedCornerShape(8.dp), contentPadding = PaddingValues(horizontal = 8.dp)) {
-                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
-                Text("Prévia", fontSize = 12.sp)
-            }
+        Spacer(Modifier.width(8.dp))
+        Button(onClick = onDownload, modifier = Modifier.height(36.dp), colors = ButtonDefaults.buttonColors(containerColor = PurpleMain), shape = RoundedCornerShape(12.dp), contentPadding = PaddingValues(horizontal = 10.dp)) {
+            Text("Baixar", fontSize = 13.sp)
         }
     }
+}
+
+private fun String?.isValidHttpLink(): Boolean {
+    if (this.isNullOrBlank()) return false
+    val uri = android.net.Uri.parse(this)
+    return (uri.scheme.equals("http", ignoreCase = true) || uri.scheme.equals("https", ignoreCase = true)) &&
+        !uri.host.isNullOrBlank()
 }
 
 fun formatDuration(seconds: Double?): String {
