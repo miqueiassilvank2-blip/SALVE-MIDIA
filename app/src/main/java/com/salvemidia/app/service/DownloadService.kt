@@ -47,28 +47,55 @@ class DownloadService : Service() {
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             try {
                 val dir = File(getExternalFilesDir(null), "SalveMidia").apply { mkdirs() }
-                val req = YoutubeDLRequest(url)
-                req.addOption("--extractor-args", "youtube:player_client=android_vr,web_safari")
-                req.addOption("-o", dir.absolutePath + "/%(title).80s.%(ext)s")
-                req.addOption("--no-playlist")
-                if (audio) {
-                    req.addOption("-x")
-                    req.addOption("--audio-format", "mp3")
-                    req.addOption("--embed-thumbnail")
-                    req.addOption("--convert-thumbnails", "jpg")
-                    req.addOption("--add-metadata")
-                } else {
-                    req.addOption("-f", "bestvideo[height<=$quality]+bestaudio/best[height<=$quality]/best")
-                    req.addOption("--merge-output-format", "mp4")
+                val clients = listOf("android_vr", "tv", "ios", "web_safari", "mweb")
+                var lastError: Exception? = null
+                var downloaded = false
+
+                for (client in clients) {
+                    val req = YoutubeDLRequest(url)
+                    req.addOption("--extractor-args", "youtube:player_client=$client")
+                    req.addOption("--no-check-certificates")
+                    req.addOption("--retries", "3")
+                    req.addOption("-o", dir.absolutePath + "/%(title).80s.%(ext)s")
+                    req.addOption("--no-playlist")
+                    if (audio) {
+                        req.addOption("-x")
+                        req.addOption("--audio-format", "mp3")
+                        req.addOption("--embed-thumbnail")
+                        req.addOption("--convert-thumbnails", "jpg")
+                        req.addOption("--add-metadata")
+                    } else {
+                        req.addOption("-f", "bestvideo[height<=$quality]+bestaudio/best[height<=$quality]/best")
+                        req.addOption("--merge-output-format", "mp4")
+                    }
+
+                    try {
+                        YoutubeDL.getInstance().execute(req, "dl$startId") { progress, _, _ ->
+                            nm.notify(notifId, buildNotification(title, progress.toInt().coerceIn(0, 100), "${progress.toInt()}%"))
+                        }
+                        downloaded = true
+                        break
+                    } catch (e: Exception) {
+                        lastError = e
+                    }
                 }
-                YoutubeDL.getInstance().execute(req, "dl$startId") { progress, _, _ ->
-                    nm.notify(notifId, buildNotification(title, progress.toInt().coerceIn(0, 100), "${progress.toInt()}%"))
+
+                if (!downloaded) {
+                    val errorMessage = lastError?.message ?: "Falha no download"
+                    File(getExternalFilesDir(null), "erro_download.txt").writeText(errorMessage)
+                    val lastUsefulLine = errorMessage.lineSequence()
+                        .map { it.trim() }
+                        .lastOrNull { it.isNotEmpty() && !it.startsWith("WARNING") }
+                        ?: "Falha no download"
+                    toast("Erro: ${lastUsefulLine.take(150)}")
+                    return@launch
                 }
+
                 AppDatabase.getDatabase(applicationContext).historyDao()
                     .insert(HistoryItem(title = title, platform = detectPlatform(url), url = url))
                 toast("Download concluído: $title")
             } catch (e: Exception) {
-                toast("Erro: ${e.message?.take(120) ?: "falha no download"}")
+                toast("Erro: ${e.message?.take(150) ?: "falha no download"}")
             } finally {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf(startId)
