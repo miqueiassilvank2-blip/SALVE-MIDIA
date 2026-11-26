@@ -55,4 +55,22 @@ class HomeViewModel : ViewModel() {
             }
         }
     }
+
+    fun getStreamUrl(url: String, onResult: (String?) -> Unit) {
+        viewModelScope.launch {
+            val streamUrl = withContext(Dispatchers.IO) {
+                try {
+                    val request = YoutubeDLRequest(url)
+                    request.addOption("-g")
+                    request.addOption("-f", "best[height<=480][ext=mp4]/best[height<=480]/best")
+                    request.addOption("--no-playlist")
+                    YoutubeDL.getInstance().execute(request).out.lines()
+                        .firstOrNull { it.isNotBlank() }
+                } catch (_: Exception) {
+                    null
+                }
+            }
+            onResult(streamUrl)
+        }
+    }
 }

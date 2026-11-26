@@ -75,6 +75,8 @@ dependencies {
     // youtubedl-android
     implementation("io.github.junkfood02.youtubedl-android:library:0.17.2")
     implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.17.2")
+    implementation("androidx.media3:media3-exoplayer:1.2.1")
+    implementation("androidx.media3:media3-ui:1.2.1")
 
     // Coil
     implementation("io.coil-kt:coil-compose:2.5.0")

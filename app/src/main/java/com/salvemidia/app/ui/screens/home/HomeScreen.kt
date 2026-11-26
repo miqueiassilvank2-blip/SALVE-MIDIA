@@ -33,10 +33,12 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Surface
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.runtime.Composable
@@ -44,6 +46,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -56,6 +59,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.MediaItem
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
@@ -79,6 +87,7 @@ fun HomeScreen(navController: NavController, viewModel: HomeViewModel = viewMode
     val linkFocus = remember { FocusRequester() }
     val state by viewModel.state.collectAsState()
     var pending by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var preview by remember { mutableStateOf<PreviewRequest?>(null) }
 
     val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     LaunchedEffect(Unit) {
@@ -95,6 +104,18 @@ fun HomeScreen(navController: NavController, viewModel: HomeViewModel = viewMode
                 ContextCompat.startForegroundService(context, i)
                 Toast.makeText(context, "Download iniciado", Toast.LENGTH_SHORT).show()
                 pending = null
+            }
+        )
+    }
+
+    preview?.let { request ->
+        PreviewDialog(
+            request = request,
+            viewModel = viewModel,
+            onDismiss = { preview = null },
+            onDownload = {
+                pending = request.url to request.title
+                preview = null
             }
         )
     }
@@ -128,17 +149,21 @@ fun HomeScreen(navController: NavController, viewModel: HomeViewModel = viewMode
 
         LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
             item {
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(24.dp))
                 SearchSection(viewModel, searchFocus)
                 Row(Modifier.fillMaxWidth().padding(vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
                     HorizontalDivider(Modifier.weight(1f), color = TextSecondary.copy(alpha = 0.35f))
                     Text("Ou", color = TextSecondary, modifier = Modifier.padding(horizontal = 12.dp))
                     HorizontalDivider(Modifier.weight(1f), color = TextSecondary.copy(alpha = 0.35f))
                 }
-                LinkSection(linkFocus) { link ->
+                LinkSection(linkFocus, onDownload = { link ->
                     if (link.isBlank()) Toast.makeText(context, "Cole um link primeiro", Toast.LENGTH_SHORT).show()
                     else pending = link to link
+                }, onPreview = { link ->
+                    if (link.isBlank()) Toast.makeText(context, "Cole um link primeiro", Toast.LENGTH_SHORT).show()
+                    else preview = PreviewRequest(link, link)
                 }
+                )
             }
             if (selectedTab == 0) {
                 when (val s = state) {
@@ -148,10 +173,11 @@ fun HomeScreen(navController: NavController, viewModel: HomeViewModel = viewMode
                         }
                     }
                     is HomeState.Success -> items(s.results) { r ->
-                        SearchResultItem(r) {
-                            val u = r.webpage_url ?: r.url
-                            if (u != null) pending = u to (r.title ?: "Vídeo")
-                        }
+                        val u = r.webpage_url ?: r.url
+                        SearchResultItem(r,
+                            onDownload = { if (u != null) pending = u to (r.title ?: "Vídeo") },
+                            onPreview = { if (u != null) preview = PreviewRequest(u, r.title ?: "Vídeo", r.thumbnail) }
+                        )
                     }
                     is HomeState.Error -> item { Text(s.message, color = Color.Red, modifier = Modifier.padding(16.dp)) }
                     else -> {}
@@ -181,6 +207,63 @@ fun DownloadDialog(onDismiss: () -> Unit, onChoose: (Boolean, Int) -> Unit) {
     )
 }
 
+private data class PreviewRequest(val url: String, val title: String, val thumbnail: String? = null)
+
+@Composable
+private fun PreviewDialog(
+    request: PreviewRequest,
+    viewModel: HomeViewModel,
+    onDismiss: () -> Unit,
+    onDownload: () -> Unit
+) {
+    val context = LocalContext.current
+    var streamUrl by remember(request.url) { mutableStateOf<String?>(null) }
+    var loading by remember(request.url) { mutableStateOf(true) }
+    LaunchedEffect(request.url) {
+        viewModel.getStreamUrl(request.url) { result ->
+            streamUrl = result
+            loading = false
+        }
+    }
+    val player = remember(streamUrl) {
+        streamUrl?.let { url ->
+            ExoPlayer.Builder(context).build().apply {
+                setMediaItem(MediaItem.fromUri(url))
+                prepare()
+                playWhenReady = true
+            }
+        }
+    }
+    DisposableEffect(player) {
+        onDispose { player?.release() }
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(shape = RoundedCornerShape(16.dp), color = CardBackground) {
+            Column(Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(request.title, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp))
+                when {
+                    player != null -> AndroidView(
+                        factory = { viewContext -> PlayerView(viewContext).apply { this.player = player; useController = true } },
+                        modifier = Modifier.fillMaxWidth().height(210.dp)
+                    )
+                    loading -> Box(Modifier.fillMaxWidth().height(210.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = PurpleMain)
+                    }
+                    else -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        AsyncImage(model = request.thumbnail, contentDescription = null, modifier = Modifier.fillMaxWidth().height(180.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
+                        Text("Não foi possível carregar a prévia", color = TextSecondary, modifier = Modifier.padding(top = 8.dp))
+                    }
+                }
+                Row(Modifier.fillMaxWidth().padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onDownload, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = PurpleMain)) { Text("Baixar", color = TextWhite) }
+                    Button(onClick = onDismiss, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = Background)) { Text("Fechar", color = TextWhite) }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun SearchSection(viewModel: HomeViewModel, focusRequester: FocusRequester) {
     var query by remember { mutableStateOf("") }
@@ -201,7 +284,7 @@ fun SearchSection(viewModel: HomeViewModel, focusRequester: FocusRequester) {
 }
 
 @Composable
-fun LinkSection(focusRequester: FocusRequester, onDownload: (String) -> Unit) {
+fun LinkSection(focusRequester: FocusRequester, onDownload: (String) -> Unit, onPreview: (String) -> Unit) {
     var link by remember { mutableStateOf("") }
     Column {
         OutlinedTextField(
@@ -215,13 +298,19 @@ fun LinkSection(focusRequester: FocusRequester, onDownload: (String) -> Unit) {
             singleLine = true
         )
         Spacer(Modifier.height(8.dp))
-        GradientButton("Baixar por Link", Icons.Default.Download) { onDownload(link.trim()) }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            GradientButton("Baixar por Link", Icons.Default.Download, Modifier.weight(1f)) { onDownload(link.trim()) }
+            Button(onClick = { onPreview(link.trim()) }, shape = RoundedCornerShape(16.dp), colors = ButtonDefaults.buttonColors(containerColor = CardBackground)) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = TextWhite)
+                Text("Prévia", color = TextWhite)
+            }
+        }
     }
 }
 
 @Composable
-fun GradientButton(text: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
-    Button(onClick = onClick, modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(16.dp), colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent), contentPadding = PaddingValues()) {
+fun GradientButton(text: String, icon: androidx.compose.ui.graphics.vector.ImageVector, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Button(onClick = onClick, modifier = modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(16.dp), colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent), contentPadding = PaddingValues()) {
         Row(modifier = Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(PurpleMain, PurpleGradientEnd)), RoundedCornerShape(16.dp)), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
             Icon(icon, contentDescription = null, tint = TextWhite, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
@@ -231,7 +320,7 @@ fun GradientButton(text: String, icon: androidx.compose.ui.graphics.vector.Image
 }
 
 @Composable
-fun SearchResultItem(result: SearchResult, onDownload: () -> Unit) {
+fun SearchResultItem(result: SearchResult, onDownload: () -> Unit, onPreview: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -244,7 +333,7 @@ fun SearchResultItem(result: SearchResult, onDownload: () -> Unit) {
         AsyncImage(
             model = result.thumbnail,
             contentDescription = null,
-            modifier = Modifier.size(100.dp, 60.dp).clip(RoundedCornerShape(8.dp)),
+            modifier = Modifier.size(100.dp, 60.dp).clip(RoundedCornerShape(8.dp)).clickable(onClick = onPreview),
             contentScale = ContentScale.Crop
         )
         Spacer(Modifier.width(12.dp))
@@ -252,12 +341,13 @@ fun SearchResultItem(result: SearchResult, onDownload: () -> Unit) {
             Text(result.title ?: "Sem título", color = TextWhite, fontWeight = FontWeight.Bold, maxLines = 2, fontSize = 14.sp)
             Text(formatDuration(result.duration), color = TextSecondary, fontSize = 12.sp)
         }
-        Button(
-            onClick = onDownload,
-            colors = ButtonDefaults.buttonColors(containerColor = PurpleMain),
-            shape = RoundedCornerShape(8.dp),
-            contentPadding = PaddingValues(horizontal = 12.dp)
-        ) { Text("Baixar", fontSize = 12.sp) }
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Button(onClick = onDownload, colors = ButtonDefaults.buttonColors(containerColor = PurpleMain), shape = RoundedCornerShape(8.dp), contentPadding = PaddingValues(horizontal = 8.dp)) { Text("Baixar", fontSize = 12.sp) }
+            Button(onClick = onPreview, colors = ButtonDefaults.buttonColors(containerColor = CardBackground), shape = RoundedCornerShape(8.dp), contentPadding = PaddingValues(horizontal = 8.dp)) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                Text("Prévia", fontSize = 12.sp)
+            }
+        }
     }
 }
 
