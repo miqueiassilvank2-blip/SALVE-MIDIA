@@ -66,7 +66,7 @@ class HomeViewModel : ViewModel() {
                     try {
                         val request = YoutubeDLRequest(url)
                         request.addOption("-g")
-                        request.addOption("-f", "best[height<=480][ext=mp4]/best[height<=480]/best")
+                        request.addOption("-f", "best[height<=360][ext=mp4][protocol^=https]/best[height<=360][ext=mp4]/best[height<=360]/best")
                         request.addOption("--no-playlist")
                         request.addOption("--extractor-args", "youtube:player_client=$playerClient")
                         val streamUrl = YoutubeDL.getInstance().execute(request).out.lines()

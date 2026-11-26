@@ -9,6 +9,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -65,6 +66,8 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -232,16 +235,21 @@ private fun PreviewDialog(
     }
     val player = remember(streamUrl) {
         streamUrl?.let { url ->
-            ExoPlayer.Builder(context).build().apply {
-                addListener(object : Player.Listener {
-                    override fun onPlayerError(error: PlaybackException) {
-                        playerError = error.message
-                    }
-                })
-                setMediaItem(MediaItem.fromUri(url))
-                prepare()
-                playWhenReady = true
-            }
+            val dataSourceFactory = DefaultHttpDataSource.Factory()
+                .setUserAgent("Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36")
+                .setAllowCrossProtocolRedirects(true)
+            ExoPlayer.Builder(context)
+                .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+                .build().apply {
+                    addListener(object : Player.Listener {
+                        override fun onPlayerError(error: PlaybackException) {
+                            playerError = error.message
+                        }
+                    })
+                    setMediaItem(MediaItem.fromUri(url))
+                    prepare()
+                    playWhenReady = true
+                }
         }
     }
     DisposableEffect(player) {
@@ -254,8 +262,16 @@ private fun PreviewDialog(
                 Text(request.title, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp))
                 when {
                     player != null -> AndroidView(
-                        factory = { viewContext -> PlayerView(viewContext).apply { this.player = player; useController = true } },
-                        modifier = Modifier.fillMaxWidth().height(210.dp)
+                        factory = { viewContext ->
+                            PlayerView(viewContext).apply {
+                                this.player = player
+                                useController = true
+                                setShowNextButton(false)
+                                setShowPreviousButton(false)
+                                setShowSubtitleButton(false)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)
                     )
                     loading -> Box(Modifier.fillMaxWidth().height(210.dp), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(color = PurpleMain)
@@ -273,8 +289,8 @@ private fun PreviewDialog(
                     Text(playerError!!.takeLast(200), color = TextSecondary, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
                 }
                 Row(Modifier.fillMaxWidth().padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onDownload, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = PurpleMain)) { Text("Baixar", color = TextWhite) }
-                    Button(onClick = onDismiss, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = Background)) { Text("Fechar", color = TextWhite) }
+                    Button(onClick = onDownload, modifier = Modifier.weight(1f).height(40.dp), shape = RoundedCornerShape(12.dp), contentPadding = PaddingValues(0.dp), colors = ButtonDefaults.buttonColors(containerColor = PurpleMain)) { Text("Baixar", color = TextWhite, fontSize = 14.sp) }
+                    Button(onClick = onDismiss, modifier = Modifier.weight(1f).height(40.dp), shape = RoundedCornerShape(12.dp), contentPadding = PaddingValues(0.dp), colors = ButtonDefaults.buttonColors(containerColor = Background)) { Text("Fechar", color = TextWhite, fontSize = 14.sp) }
                 }
             }
         }
