@@ -4,16 +4,12 @@ import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -40,10 +36,10 @@ fun NetworkGrid() {
         SocialNetwork("TikTok", android.R.drawable.ic_menu_camera),
         SocialNetwork("Instagram", android.R.drawable.ic_menu_gallery),
         SocialNetwork("Facebook", android.R.drawable.ic_menu_share),
-        SocialNetwork("X", android.R.drawable.ic_menu_info_details),
+        SocialNetwork("X (Twitter)", android.R.drawable.ic_menu_info_details),
         SocialNetwork("Kwai", android.R.drawable.ic_menu_send),
         SocialNetwork("Vimeo", android.R.drawable.ic_menu_view),
-        SocialNetwork("E muito mais", android.R.drawable.ic_menu_add)
+        SocialNetwork("E muito mais!", android.R.drawable.ic_menu_add)
     )
 
     Column(modifier = Modifier.padding(16.dp)) {
@@ -54,16 +50,20 @@ fun NetworkGrid() {
             fontSize = 18.sp,
             modifier = Modifier.padding(bottom = 12.dp)
         )
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(4),
-            contentPadding = PaddingValues(0.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            items(networks) { network ->
-                NetworkItem(network) {
-                    Toast.makeText(context, "Em breve: suporte direto para ${network.name}", Toast.LENGTH_SHORT).show()
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            networks.chunked(4).forEach { rowNetworks ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    rowNetworks.forEach { network ->
+                        NetworkItem(
+                            network = network,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Toast.makeText(context, "Em breve: suporte direto para ${network.name}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
                 }
             }
         }
@@ -71,10 +71,10 @@ fun NetworkGrid() {
 }
 
 @Composable
-fun NetworkItem(network: SocialNetwork, onClick: () -> Unit) {
+fun NetworkItem(network: SocialNetwork, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Column(
-        modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
             .background(CardBackground)
             .clickable(onClick = onClick)
             .padding(8.dp),
