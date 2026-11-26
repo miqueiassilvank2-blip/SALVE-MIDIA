@@ -3,6 +3,8 @@ package com.salvemidia.app.ui.screens.home
 import android.Manifest
 import android.content.Intent
 import android.os.Build
+import android.webkit.WebChromeClient
+import android.webkit.WebView
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -62,13 +64,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.datasource.DefaultHttpDataSource
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.ui.PlayerView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
@@ -116,7 +111,6 @@ fun HomeScreen(navController: NavController, viewModel: HomeViewModel = viewMode
     preview?.let { request ->
         PreviewDialog(
             request = request,
-            viewModel = viewModel,
             onDismiss = { preview = null },
             onDownload = {
                 pending = request.url to request.title
@@ -217,76 +211,49 @@ private data class PreviewRequest(val url: String, val title: String, val thumbn
 @Composable
 private fun PreviewDialog(
     request: PreviewRequest,
-    viewModel: HomeViewModel,
     onDismiss: () -> Unit,
     onDownload: () -> Unit
 ) {
     val context = LocalContext.current
-    var streamUrl by remember(request.url) { mutableStateOf<String?>(null) }
-    var previewError by remember(request.url) { mutableStateOf<String?>(null) }
-    var playerError by remember(request.url) { mutableStateOf<String?>(null) }
-    var loading by remember(request.url) { mutableStateOf(true) }
-    LaunchedEffect(request.url) {
-        viewModel.getStreamUrl(request.url) { result, error ->
-            streamUrl = result
-            previewError = error
-            loading = false
+    val videoId = remember(request.url) {
+        Regex("(?:youtube\\.com/watch\\?[^#]*?v=|youtu\\.be/|youtube\\.com/shorts/)([A-Za-z0-9_-]+)", RegexOption.IGNORE_CASE)
+            .find(request.url)?.groupValues?.get(1)
+    }
+    val webView = remember(videoId) {
+        videoId?.let { id ->
+            WebView(context).apply {
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                settings.mediaPlaybackRequiresUserGesture = false
+                setBackgroundColor(android.graphics.Color.BLACK)
+                webChromeClient = WebChromeClient()
+                val html = """<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:0;background:#000"><iframe width="100%" height="100%" src="https://www.youtube.com/embed/$id?playsinline=1&autoplay=1&rel=0" frameborder="0" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe></body></html>"""
+                loadDataWithBaseURL("https://www.youtube.com", html, "text/html", "utf-8", null)
+            }
         }
     }
-    val player = remember(streamUrl) {
-        streamUrl?.let { url ->
-            val dataSourceFactory = DefaultHttpDataSource.Factory()
-                .setUserAgent("Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36")
-                .setAllowCrossProtocolRedirects(true)
-            ExoPlayer.Builder(context)
-                .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
-                .build().apply {
-                    addListener(object : Player.Listener {
-                        override fun onPlayerError(error: PlaybackException) {
-                            playerError = error.message
-                        }
-                    })
-                    setMediaItem(MediaItem.fromUri(url))
-                    prepare()
-                    playWhenReady = true
-                }
+    DisposableEffect(webView) {
+        onDispose {
+            webView?.stopLoading()
+            webView?.loadUrl("about:blank")
+            webView?.destroy()
         }
-    }
-    DisposableEffect(player) {
-        onDispose { player?.release() }
     }
 
     Dialog(onDismissRequest = onDismiss) {
         Surface(shape = RoundedCornerShape(16.dp), color = CardBackground) {
             Column(Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(request.title, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp))
-                when {
-                    player != null -> AndroidView(
-                        factory = { viewContext ->
-                            PlayerView(viewContext).apply {
-                                this.player = player
-                                useController = true
-                                setShowNextButton(false)
-                                setShowPreviousButton(false)
-                                setShowSubtitleButton(false)
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+                if (webView != null) {
+                    AndroidView(
+                        factory = { webView },
+                        modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp))
                     )
-                    loading -> Box(Modifier.fillMaxWidth().height(210.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = PurpleMain)
+                } else {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        AsyncImage(model = request.thumbnail, contentDescription = null, modifier = Modifier.fillMaxWidth().height(180.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
+                        Text("Prévia disponível só para YouTube", color = TextSecondary, modifier = Modifier.padding(top = 8.dp))
                     }
-                    else -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        AsyncImage(model = request.thumbnail ?: request.id?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" }, contentDescription = null, modifier = Modifier.fillMaxWidth().height(180.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
-                        Text("Não foi possível carregar a prévia", color = TextSecondary, modifier = Modifier.padding(top = 8.dp))
-                        (previewError ?: playerError)?.takeLast(200)?.let { error ->
-                            Text(error, color = TextSecondary, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
-                        }
-                    }
-                }
-                if (player != null && playerError != null) {
-                    Text("Não foi possível carregar a prévia", color = TextSecondary, modifier = Modifier.padding(top = 8.dp))
-                    Text(playerError!!.takeLast(200), color = TextSecondary, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
                 }
                 Row(Modifier.fillMaxWidth().padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = onDownload, modifier = Modifier.weight(1f).height(40.dp), shape = RoundedCornerShape(12.dp), contentPadding = PaddingValues(0.dp), colors = ButtonDefaults.buttonColors(containerColor = PurpleMain)) { Text("Baixar", color = TextWhite, fontSize = 14.sp) }
