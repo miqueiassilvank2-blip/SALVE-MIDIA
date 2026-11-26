@@ -53,6 +53,9 @@ class DownloadService : Service() {
                 if (audio) {
                     req.addOption("-x")
                     req.addOption("--audio-format", "mp3")
+                    req.addOption("--embed-thumbnail")
+                    req.addOption("--convert-thumbnails", "jpg")
+                    req.addOption("--add-metadata")
                 } else {
                     req.addOption("-f", "bestvideo[height<=$quality]+bestaudio/best[height<=$quality]/best")
                     req.addOption("--merge-output-format", "mp4")

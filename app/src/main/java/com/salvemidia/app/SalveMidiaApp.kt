@@ -19,6 +19,13 @@ class SalveMidiaApp : Application() {
         try {
             YoutubeDL.getInstance().init(this)
             FFmpeg.getInstance().init(this)
+            Thread {
+                try {
+                    YoutubeDL.getInstance().updateYoutubeDL(this, YoutubeDL.UpdateChannel.STABLE)
+                } catch (e: Throwable) {
+                    Log.e("SalveMidiaApp", "falha ao atualizar youtubedl", e)
+                }
+            }.start()
         } catch (e: Throwable) {
             Log.e("SalveMidiaApp", "falha ao iniciar youtubedl/ffmpeg", e)
         }

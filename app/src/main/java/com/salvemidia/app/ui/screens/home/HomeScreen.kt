@@ -62,6 +62,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import androidx.core.content.ContextCompat
@@ -176,7 +178,7 @@ fun HomeScreen(navController: NavController, viewModel: HomeViewModel = viewMode
                         val u = r.webpage_url ?: r.url
                         SearchResultItem(r,
                             onDownload = { if (u != null) pending = u to (r.title ?: "Vídeo") },
-                            onPreview = { if (u != null) preview = PreviewRequest(u, r.title ?: "Vídeo", r.thumbnail) }
+                            onPreview = { if (u != null) preview = PreviewRequest(u, r.title ?: "Vídeo", r.thumbnail, r.id) }
                         )
                     }
                     is HomeState.Error -> item { Text(s.message, color = Color.Red, modifier = Modifier.padding(16.dp)) }
@@ -207,7 +209,7 @@ fun DownloadDialog(onDismiss: () -> Unit, onChoose: (Boolean, Int) -> Unit) {
     )
 }
 
-private data class PreviewRequest(val url: String, val title: String, val thumbnail: String? = null)
+private data class PreviewRequest(val url: String, val title: String, val thumbnail: String? = null, val id: String? = null)
 
 @Composable
 private fun PreviewDialog(
@@ -218,16 +220,24 @@ private fun PreviewDialog(
 ) {
     val context = LocalContext.current
     var streamUrl by remember(request.url) { mutableStateOf<String?>(null) }
+    var previewError by remember(request.url) { mutableStateOf<String?>(null) }
+    var playerError by remember(request.url) { mutableStateOf<String?>(null) }
     var loading by remember(request.url) { mutableStateOf(true) }
     LaunchedEffect(request.url) {
-        viewModel.getStreamUrl(request.url) { result ->
+        viewModel.getStreamUrl(request.url) { result, error ->
             streamUrl = result
+            previewError = error
             loading = false
         }
     }
     val player = remember(streamUrl) {
         streamUrl?.let { url ->
             ExoPlayer.Builder(context).build().apply {
+                addListener(object : Player.Listener {
+                    override fun onPlayerError(error: PlaybackException) {
+                        playerError = error.message
+                    }
+                })
                 setMediaItem(MediaItem.fromUri(url))
                 prepare()
                 playWhenReady = true
@@ -251,9 +261,16 @@ private fun PreviewDialog(
                         CircularProgressIndicator(color = PurpleMain)
                     }
                     else -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        AsyncImage(model = request.thumbnail, contentDescription = null, modifier = Modifier.fillMaxWidth().height(180.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
+                        AsyncImage(model = request.thumbnail ?: request.id?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" }, contentDescription = null, modifier = Modifier.fillMaxWidth().height(180.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
                         Text("Não foi possível carregar a prévia", color = TextSecondary, modifier = Modifier.padding(top = 8.dp))
+                        (previewError ?: playerError)?.take(150)?.let { error ->
+                            Text(error, color = TextSecondary, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                        }
                     }
+                }
+                if (player != null && playerError != null) {
+                    Text("Não foi possível carregar a prévia", color = TextSecondary, modifier = Modifier.padding(top = 8.dp))
+                    Text(playerError!!.take(150), color = TextSecondary, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
                 }
                 Row(Modifier.fillMaxWidth().padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = onDownload, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = PurpleMain)) { Text("Baixar", color = TextWhite) }
@@ -331,7 +348,7 @@ fun SearchResultItem(result: SearchResult, onDownload: () -> Unit, onPreview: ()
         verticalAlignment = Alignment.CenterVertically
     ) {
         AsyncImage(
-            model = result.thumbnail,
+            model = result.thumbnail ?: result.id?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" },
             contentDescription = null,
             modifier = Modifier.size(100.dp, 60.dp).clip(RoundedCornerShape(8.dp)).clickable(onClick = onPreview),
             contentScale = ContentScale.Crop
