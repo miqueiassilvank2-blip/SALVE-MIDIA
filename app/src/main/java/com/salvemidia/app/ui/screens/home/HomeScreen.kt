@@ -97,7 +97,7 @@ fun HomeScreen(navController: NavController, viewModel: HomeViewModel = viewMode
         val clipText = clipboard?.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()?.trim()
         if (
             link.isEmpty() &&
-            clipText.isValidHttpLink() &&
+            clipText != null && clipText.isValidHttpLink() &&
             clipText != lastAutoPastedLink
         ) {
             link = clipText
@@ -312,7 +312,7 @@ fun SearchResultItem(result: SearchResult, onDownload: () -> Unit) {
         )
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(result.title ?: "Sem título", color = TextWhite, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 14.sp, modifier = Modifier.weight(1f))
+            Text(result.title ?: "Sem título", color = TextWhite, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 14.sp)
             Text(formatDuration(result.duration), color = TextSecondary, fontSize = 12.sp)
         }
         Spacer(Modifier.width(8.dp))
