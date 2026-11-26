@@ -77,7 +77,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import com.salvemidia.app.service.DownloadService
@@ -103,7 +103,7 @@ fun HomeScreen(navController: NavController, viewModel: HomeViewModel = viewMode
     var link by remember { mutableStateOf("") }
     var lastAutoPastedLink by remember { mutableStateOf<String?>(null) }
     val lifecycleOwner = LocalLifecycleOwner.current
-    val readClipboard by rememberUpdatedState {
+    val readClipboardFn: () -> Unit = {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
         val clipText = clipboard?.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()?.trim()
         if (
@@ -117,6 +117,8 @@ fun HomeScreen(navController: NavController, viewModel: HomeViewModel = viewMode
             Toast.makeText(context, "Link colado automaticamente", Toast.LENGTH_SHORT).show()
         }
     }
+
+    val readClipboard by rememberUpdatedState(readClipboardFn)
 
     DisposableEffect(lifecycleOwner) {
         readClipboard()
