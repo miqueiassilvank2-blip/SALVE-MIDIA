@@ -263,14 +263,14 @@ private fun PreviewDialog(
                     else -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         AsyncImage(model = request.thumbnail ?: request.id?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" }, contentDescription = null, modifier = Modifier.fillMaxWidth().height(180.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
                         Text("Não foi possível carregar a prévia", color = TextSecondary, modifier = Modifier.padding(top = 8.dp))
-                        (previewError ?: playerError)?.take(150)?.let { error ->
+                        (previewError ?: playerError)?.takeLast(200)?.let { error ->
                             Text(error, color = TextSecondary, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
                         }
                     }
                 }
                 if (player != null && playerError != null) {
                     Text("Não foi possível carregar a prévia", color = TextSecondary, modifier = Modifier.padding(top = 8.dp))
-                    Text(playerError!!.take(150), color = TextSecondary, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                    Text(playerError!!.takeLast(200), color = TextSecondary, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
                 }
                 Row(Modifier.fillMaxWidth().padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = onDownload, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = PurpleMain)) { Text("Baixar", color = TextWhite) }

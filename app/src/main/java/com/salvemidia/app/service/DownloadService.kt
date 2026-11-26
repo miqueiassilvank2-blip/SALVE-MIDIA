@@ -48,6 +48,7 @@ class DownloadService : Service() {
             try {
                 val dir = File(getExternalFilesDir(null), "SalveMidia").apply { mkdirs() }
                 val req = YoutubeDLRequest(url)
+                req.addOption("--extractor-args", "youtube:player_client=android_vr,web_safari")
                 req.addOption("-o", dir.absolutePath + "/%(title).80s.%(ext)s")
                 req.addOption("--no-playlist")
                 if (audio) {

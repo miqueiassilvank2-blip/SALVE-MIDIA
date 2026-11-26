@@ -60,16 +60,28 @@ class HomeViewModel : ViewModel() {
     fun getStreamUrl(url: String, onResult: (String?, String?) -> Unit) {
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
-                try {
-                    val request = YoutubeDLRequest(url)
-                    request.addOption("-g")
-                    request.addOption("-f", "best[height<=480][ext=mp4]/best[height<=480]/best")
-                    request.addOption("--no-playlist")
-                    YoutubeDL.getInstance().execute(request).out.lines()
-                        .firstOrNull { it.isNotBlank() } to null
-                } catch (e: Exception) {
-                    null to e.message
+                var lastError: String? = null
+                val playerClients = listOf("android_vr,web_safari", "tv", "ios")
+                for (playerClient in playerClients) {
+                    try {
+                        val request = YoutubeDLRequest(url)
+                        request.addOption("-g")
+                        request.addOption("-f", "best[height<=480][ext=mp4]/best[height<=480]/best")
+                        request.addOption("--no-playlist")
+                        request.addOption("--extractor-args", "youtube:player_client=$playerClient")
+                        val streamUrl = YoutubeDL.getInstance().execute(request).out.lines()
+                            .firstOrNull { it.isNotBlank() }
+                        if (streamUrl != null) return@withContext streamUrl to null
+                        lastError = "Nenhuma URL de transmissão foi retornada."
+                    } catch (e: Exception) {
+                        lastError = e.message.orEmpty()
+                    }
                 }
+                val message = lastError.orEmpty().lineSequence()
+                    .filterNot { it.startsWith("WARNING") }
+                    .joinToString("\n")
+                    .takeLast(200)
+                null to message.ifBlank { "Erro desconhecido" }
             }
             onResult(result.first, result.second)
         }
