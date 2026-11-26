@@ -42,11 +42,11 @@ fun BottomNavigationBar(navController: NavController) {
                     }
                 },
                 colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = PurpleMain,
+                    selectedIconColor = TextWhite,
                     unselectedIconColor = TextSecondary,
                     selectedTextColor = PurpleMain,
                     unselectedTextColor = TextSecondary,
-                    indicatorColor = Background
+                    indicatorColor = PurpleMain
                 )
             )
         }

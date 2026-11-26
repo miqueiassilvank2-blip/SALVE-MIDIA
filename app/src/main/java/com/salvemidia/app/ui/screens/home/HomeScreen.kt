@@ -7,6 +7,8 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -25,14 +27,18 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
-import androidx.compose.material3.TabRowDefaults
-import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -69,7 +75,8 @@ import com.salvemidia.app.ui.theme.TextWhite
 fun HomeScreen(navController: NavController, viewModel: HomeViewModel = viewModel()) {
     val context = LocalContext.current
     var selectedTab by remember { mutableStateOf(0) }
-    val tabs = listOf("Buscar", "Por Link")
+    val searchFocus = remember { FocusRequester() }
+    val linkFocus = remember { FocusRequester() }
     val state by viewModel.state.collectAsState()
     var pending by remember { mutableStateOf<Pair<String, String>?>(null) }
 
@@ -95,40 +102,44 @@ fun HomeScreen(navController: NavController, viewModel: HomeViewModel = viewMode
     Column(Modifier.fillMaxSize().background(Background)) {
         AppHeader(onSettingsClick = { navController.navigate(Screen.Settings.route) })
 
-        TabRow(
-            selectedTabIndex = selectedTab,
-            containerColor = Background,
-            contentColor = TextWhite,
-            indicator = { tabPositions ->
-                TabRowDefaults.Indicator(Modifier.tabIndicatorOffset(tabPositions[selectedTab]), color = PurpleMain)
-            },
-            divider = {}
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+                .clip(RoundedCornerShape(16.dp)).background(CardBackground).padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            tabs.forEachIndexed { index, title ->
-                Tab(
-                    selected = selectedTab == index,
-                    onClick = { selectedTab = index },
-                    text = {
-                        Text(
-                            text = title,
-                            color = if (selectedTab == index) TextWhite else TextSecondary,
-                            fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal
-                        )
-                    }
-                )
+            listOf("Buscar", "Por Link").forEachIndexed { index, label ->
+                val active = selectedTab == index
+                Row(
+                    modifier = Modifier.weight(1f).clip(RoundedCornerShape(16.dp))
+                        .background(if (active) PurpleMain else Color.Transparent)
+                        .clickable {
+                            selectedTab = index
+                            if (index == 0) searchFocus.requestFocus() else linkFocus.requestFocus()
+                        }.padding(vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Icon(if (index == 0) Icons.Default.Search else Icons.Default.Link, null, tint = TextWhite, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(label, color = TextWhite, fontWeight = FontWeight.Bold)
+                }
             }
         }
 
         LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
             item {
                 Spacer(Modifier.height(16.dp))
-                if (selectedTab == 0) SearchSection(viewModel)
-                else LinkSection { link ->
+                SearchSection(viewModel, searchFocus)
+                Row(Modifier.fillMaxWidth().padding(vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    HorizontalDivider(Modifier.weight(1f), color = TextSecondary.copy(alpha = 0.35f))
+                    Text("Ou", color = TextSecondary, modifier = Modifier.padding(horizontal = 12.dp))
+                    HorizontalDivider(Modifier.weight(1f), color = TextSecondary.copy(alpha = 0.35f))
+                }
+                LinkSection(linkFocus) { link ->
                     if (link.isBlank()) Toast.makeText(context, "Cole um link primeiro", Toast.LENGTH_SHORT).show()
                     else pending = link to link
                 }
             }
-
             if (selectedTab == 0) {
                 when (val s = state) {
                     is HomeState.Loading -> item {
@@ -142,17 +153,11 @@ fun HomeScreen(navController: NavController, viewModel: HomeViewModel = viewMode
                             if (u != null) pending = u to (r.title ?: "Vídeo")
                         }
                     }
-                    is HomeState.Error -> item {
-                        Text(s.message, color = Color.Red, modifier = Modifier.padding(16.dp))
-                    }
+                    is HomeState.Error -> item { Text(s.message, color = Color.Red, modifier = Modifier.padding(16.dp)) }
                     else -> {}
                 }
             }
-
-            item {
-                NetworkGrid()
-                Spacer(Modifier.height(16.dp))
-            }
+            item { NetworkGrid(); Spacer(Modifier.height(16.dp)) }
         }
     }
 }
@@ -177,71 +182,49 @@ fun DownloadDialog(onDismiss: () -> Unit, onChoose: (Boolean, Int) -> Unit) {
 }
 
 @Composable
-fun SearchSection(viewModel: HomeViewModel) {
+fun SearchSection(viewModel: HomeViewModel, focusRequester: FocusRequester) {
     var query by remember { mutableStateOf("") }
     Column {
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
             placeholder = { Text("Digite o nome do vídeo...", color = TextSecondary) },
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = PurpleMain,
-                unfocusedBorderColor = CardBackground,
-                focusedContainerColor = CardBackground,
-                unfocusedContainerColor = CardBackground,
-                focusedTextColor = TextWhite,
-                unfocusedTextColor = TextWhite
-            ),
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = TextSecondary) },
+            modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
+            shape = RoundedCornerShape(16.dp),
+            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = PurpleMain, unfocusedBorderColor = TextSecondary.copy(alpha = 0.2f), focusedContainerColor = CardBackground, unfocusedContainerColor = CardBackground, focusedTextColor = TextWhite, unfocusedTextColor = TextWhite),
             singleLine = true
         )
         Spacer(Modifier.height(8.dp))
-        GradientButton("Pesquisar") { viewModel.search(query) }
+        GradientButton("Pesquisar", Icons.Default.Search) { viewModel.search(query) }
     }
 }
 
 @Composable
-fun LinkSection(onDownload: (String) -> Unit) {
+fun LinkSection(focusRequester: FocusRequester, onDownload: (String) -> Unit) {
     var link by remember { mutableStateOf("") }
     Column {
         OutlinedTextField(
             value = link,
             onValueChange = { link = it },
             placeholder = { Text("Cole o link do vídeo aqui...", color = TextSecondary) },
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = PurpleMain,
-                unfocusedBorderColor = CardBackground,
-                focusedContainerColor = CardBackground,
-                unfocusedContainerColor = CardBackground,
-                focusedTextColor = TextWhite,
-                unfocusedTextColor = TextWhite
-            ),
+            leadingIcon = { Icon(Icons.Default.Link, contentDescription = null, tint = TextSecondary) },
+            modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
+            shape = RoundedCornerShape(16.dp),
+            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = PurpleMain, unfocusedBorderColor = TextSecondary.copy(alpha = 0.2f), focusedContainerColor = CardBackground, unfocusedContainerColor = CardBackground, focusedTextColor = TextWhite, unfocusedTextColor = TextWhite),
             singleLine = true
         )
         Spacer(Modifier.height(8.dp))
-        GradientButton("Baixar por Link") { onDownload(link.trim()) }
+        GradientButton("Baixar por Link", Icons.Default.Download) { onDownload(link.trim()) }
     }
 }
 
 @Composable
-fun GradientButton(text: String, onClick: () -> Unit) {
-    Button(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
-        contentPadding = PaddingValues()
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Brush.horizontalGradient(listOf(PurpleMain, PurpleGradientEnd)), RoundedCornerShape(12.dp))
-                .padding(vertical = 12.dp),
-            contentAlignment = Alignment.Center
-        ) {
+fun GradientButton(text: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+    Button(onClick = onClick, modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(16.dp), colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent), contentPadding = PaddingValues()) {
+        Row(modifier = Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(PurpleMain, PurpleGradientEnd)), RoundedCornerShape(16.dp)), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, contentDescription = null, tint = TextWhite, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
             Text(text, color = TextWhite, fontWeight = FontWeight.Bold)
         }
     }
