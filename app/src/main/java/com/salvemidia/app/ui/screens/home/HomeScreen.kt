@@ -1,9 +1,15 @@
 package com.salvemidia.app.ui.screens.home
 
 import android.Manifest
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.net.Uri
 import android.webkit.WebChromeClient
+import android.webkit.WebViewClient
 import android.webkit.WebView
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -31,6 +37,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -41,6 +48,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -51,6 +59,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,6 +75,9 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import com.salvemidia.app.service.DownloadService
@@ -88,6 +100,32 @@ fun HomeScreen(navController: NavController, viewModel: HomeViewModel = viewMode
     val state by viewModel.state.collectAsState()
     var pending by remember { mutableStateOf<Pair<String, String>?>(null) }
     var preview by remember { mutableStateOf<PreviewRequest?>(null) }
+    var link by remember { mutableStateOf("") }
+    var lastAutoPastedLink by remember { mutableStateOf<String?>(null) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val readClipboard by rememberUpdatedState {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        val clipText = clipboard?.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()?.trim()
+        if (
+            link.isEmpty() &&
+            !clipText.isNullOrEmpty() &&
+            (clipText.startsWith("http://", ignoreCase = true) || clipText.startsWith("https://", ignoreCase = true)) &&
+            clipText != lastAutoPastedLink
+        ) {
+            link = clipText
+            lastAutoPastedLink = clipText
+            Toast.makeText(context, "Link colado automaticamente", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        readClipboard()
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) readClipboard()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     LaunchedEffect(Unit) {
@@ -155,14 +193,10 @@ fun HomeScreen(navController: NavController, viewModel: HomeViewModel = viewMode
                     Text("Ou", color = TextSecondary, modifier = Modifier.padding(horizontal = 12.dp))
                     HorizontalDivider(Modifier.weight(1f), color = TextSecondary.copy(alpha = 0.35f))
                 }
-                LinkSection(linkFocus, onDownload = { link ->
-                    if (link.isBlank()) Toast.makeText(context, "Cole um link primeiro", Toast.LENGTH_SHORT).show()
-                    else pending = link to link
-                }, onPreview = { link ->
-                    if (link.isBlank()) Toast.makeText(context, "Cole um link primeiro", Toast.LENGTH_SHORT).show()
-                    else preview = PreviewRequest(link, link)
-                }
-                )
+                LinkSection(linkFocus, link, onLinkChange = { link = it }, onDownload = { enteredLink ->
+                    if (enteredLink.isBlank()) Toast.makeText(context, "Cole um link primeiro", Toast.LENGTH_SHORT).show()
+                    else pending = enteredLink to enteredLink
+                })
             }
             if (selectedTab == 0) {
                 when (val s = state) {
@@ -219,21 +253,44 @@ private fun PreviewDialog(
         Regex("(?:youtube\\.com/watch\\?[^#]*?v=|youtu\\.be/|youtube\\.com/shorts/)([A-Za-z0-9_-]+)", RegexOption.IGNORE_CASE)
             .find(request.url)?.groupValues?.get(1)
     }
+    var previewFailed by remember(videoId) { mutableStateOf(false) }
+    val handler = remember(videoId) { Handler(Looper.getMainLooper()) }
+    val timeout = remember(videoId) { Runnable { previewFailed = true } }
     val webView = remember(videoId) {
         videoId?.let { id ->
+            val failPreview = { previewFailed = true }
             WebView(context).apply {
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
                 settings.mediaPlaybackRequiresUserGesture = false
                 setBackgroundColor(android.graphics.Color.BLACK)
                 webChromeClient = WebChromeClient()
-                val html = """<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:0;background:#000"><iframe width="100%" height="100%" src="https://www.youtube.com/embed/$id?playsinline=1&autoplay=1&rel=0" frameborder="0" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe></body></html>"""
-                loadDataWithBaseURL("https://www.youtube.com", html, "text/html", "utf-8", null)
+                webViewClient = object : WebViewClient() {
+                    override fun onReceivedError(
+                        view: WebView?,
+                        errorCode: Int,
+                        description: String?,
+                        failingUrl: String?
+                    ) {
+                        handler.removeCallbacks(timeout)
+                        failPreview()
+                    }
+
+                    override fun onPageFinished(view: WebView?, url: String?) {
+                        handler.removeCallbacks(timeout)
+                    }
+                }
+                loadUrl(
+                    "https://www.youtube.com/embed/$id?playsinline=1&autoplay=1&rel=0&origin=https://www.youtube.com",
+                    mapOf("Referer" to "https://www.youtube.com")
+                )
+                handler.postDelayed(timeout, 6_000L)
             }
         }
     }
     DisposableEffect(webView) {
         onDispose {
+            handler.removeCallbacks(timeout)
             webView?.stopLoading()
             webView?.loadUrl("about:blank")
             webView?.destroy()
@@ -244,11 +301,41 @@ private fun PreviewDialog(
         Surface(shape = RoundedCornerShape(16.dp), color = CardBackground) {
             Column(Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(request.title, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp))
-                if (webView != null) {
+                if (webView != null && !previewFailed) {
                     AndroidView(
                         factory = { webView },
                         modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp))
                     )
+                } else if (videoId != null && previewFailed) {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        AsyncImage(
+                            model = "https://i.ytimg.com/vi/$videoId/hqdefault.jpg",
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Button(
+                                onClick = {
+                                    context.startActivity(
+                                        Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=$videoId"))
+                                    )
+                                },
+                                shape = RoundedCornerShape(50),
+                                colors = ButtonDefaults.buttonColors(containerColor = PurpleMain)
+                            ) {
+                                Icon(Icons.Default.PlayArrow, contentDescription = "Abrir vídeo", tint = TextWhite)
+                            }
+                            Text(
+                                "Este vídeo não permite prévia aqui",
+                                color = TextWhite,
+                                modifier = Modifier.padding(top = 8.dp)
+                            )
+                        }
+                    }
                 } else {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         AsyncImage(model = request.thumbnail, contentDescription = null, modifier = Modifier.fillMaxWidth().height(180.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
@@ -284,27 +371,32 @@ fun SearchSection(viewModel: HomeViewModel, focusRequester: FocusRequester) {
 }
 
 @Composable
-fun LinkSection(focusRequester: FocusRequester, onDownload: (String) -> Unit, onPreview: (String) -> Unit) {
-    var link by remember { mutableStateOf("") }
+fun LinkSection(
+    focusRequester: FocusRequester,
+    link: String,
+    onLinkChange: (String) -> Unit,
+    onDownload: (String) -> Unit
+) {
     Column {
         OutlinedTextField(
             value = link,
-            onValueChange = { link = it },
+            onValueChange = onLinkChange,
             placeholder = { Text("Cole o link do vídeo aqui...", color = TextSecondary) },
             leadingIcon = { Icon(Icons.Default.Link, contentDescription = null, tint = TextSecondary) },
+            trailingIcon = {
+                if (link.isNotEmpty()) {
+                    IconButton(onClick = { onLinkChange("") }) {
+                        Icon(Icons.Default.Close, contentDescription = "Limpar link", tint = TextSecondary)
+                    }
+                }
+            },
             modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
             shape = RoundedCornerShape(16.dp),
             colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = PurpleMain, unfocusedBorderColor = TextSecondary.copy(alpha = 0.2f), focusedContainerColor = CardBackground, unfocusedContainerColor = CardBackground, focusedTextColor = TextWhite, unfocusedTextColor = TextWhite),
             singleLine = true
         )
         Spacer(Modifier.height(8.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            GradientButton("Baixar por Link", Icons.Default.Download, Modifier.weight(1f)) { onDownload(link.trim()) }
-            Button(onClick = { onPreview(link.trim()) }, shape = RoundedCornerShape(16.dp), colors = ButtonDefaults.buttonColors(containerColor = CardBackground)) {
-                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = TextWhite)
-                Text("Prévia", color = TextWhite)
-            }
-        }
+        GradientButton("Baixar por Link", Icons.Default.Download) { onDownload(link.trim()) }
     }
 }
 
