@@ -88,8 +88,17 @@ fun HomeScreen(navController: NavController, viewModel: HomeViewModel = viewMode
     val searchFocus = remember { FocusRequester() }
     val linkFocus = remember { FocusRequester() }
     val state by viewModel.state.collectAsState()
+    val linkState by viewModel.linkState.collectAsState()
     var pending by remember { mutableStateOf<Pair<String, String>?>(null) }
     var link by remember { mutableStateOf("") }
+    LaunchedEffect(link) {
+        if (link.isValidHttpLink()) {
+            kotlinx.coroutines.delay(600)
+            viewModel.loadLinkInfo(link.trim())
+        } else {
+            viewModel.clearLinkInfo()
+        }
+    }
     var lastAutoPastedLink by remember { mutableStateOf<String?>(null) }
     val lifecycleOwner = LocalLifecycleOwner.current
     val readClipboardFn: () -> Unit = {
@@ -179,8 +188,12 @@ fun HomeScreen(navController: NavController, viewModel: HomeViewModel = viewMode
                 }
                 LinkSection(linkFocus, link, onLinkChange = { link = it }, onDownload = { enteredLink ->
                     if (enteredLink.isBlank()) Toast.makeText(context, "Cole um link primeiro", Toast.LENGTH_SHORT).show()
-                    else pending = enteredLink to enteredLink
+                    else {
+                        val title = (linkState as? HomeViewModel.LinkState.Success)?.info?.title
+                        pending = enteredLink to (title ?: enteredLink)
+                    }
                 })
+                if (selectedTab == 1 || link.isNotBlank()) LinkInfoCard(linkState)
             }
             if (selectedTab == 0) {
                 when (val s = state) {
@@ -200,6 +213,47 @@ fun HomeScreen(navController: NavController, viewModel: HomeViewModel = viewMode
                 }
             }
             item { NetworkGrid(); Spacer(Modifier.height(16.dp)) }
+        }
+    }
+}
+
+@Composable
+private fun LinkInfoCard(state: HomeViewModel.LinkState) {
+    if (state is HomeViewModel.LinkState.Idle) return
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 8.dp)
+            .clip(RoundedCornerShape(16.dp)).background(CardBackground).padding(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        when (state) {
+            HomeViewModel.LinkState.Loading -> {
+                CircularProgressIndicator(color = PurpleMain, modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(8.dp))
+                Text("Carregando detalhes...", color = TextSecondary, fontSize = 13.sp)
+            }
+            is HomeViewModel.LinkState.Success -> {
+                AsyncImage(
+                    model = state.info.thumbnail,
+                    contentDescription = null,
+                    modifier = Modifier.size(120.dp, 68.dp).clip(RoundedCornerShape(12.dp)),
+                    contentScale = ContentScale.Crop
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(state.info.title ?: "Sem título", color = TextWhite, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 14.sp)
+                    state.info.uploader?.let { Text(it, color = TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp) }
+                    Text(formatDuration(state.info.duration), color = TextSecondary, fontSize = 12.sp)
+                }
+            }
+            HomeViewModel.LinkState.Error -> {
+                Box(
+                    Modifier.size(120.dp, 68.dp).clip(RoundedCornerShape(12.dp))
+                        .background(TextSecondary.copy(alpha = 0.12f))
+                )
+                Spacer(Modifier.width(12.dp))
+                Text("Não foi possível carregar os detalhes", color = TextSecondary, fontSize = 13.sp)
+            }
+            HomeViewModel.LinkState.Idle -> Unit
         }
     }
 }

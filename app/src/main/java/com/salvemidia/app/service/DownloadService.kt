@@ -3,10 +3,15 @@ package com.salvemidia.app.service
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.ContentValues
+import android.net.Uri
 import android.content.pm.ServiceInfo
+import android.os.Environment
+import android.provider.MediaStore
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -22,6 +27,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 
 class DownloadService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -45,8 +52,9 @@ class DownloadService : Service() {
 
         scope.launch {
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            var keepFinalNotification = false
             try {
-                val dir = File(getExternalFilesDir(null), "SalveMidia").apply { mkdirs() }
+                val dir = File(getExternalFilesDir(null), "tmp").apply { mkdirs() }
                 val clients = listOf("android_vr", "tv", "ios", "web_safari", "mweb")
                 var lastError: Exception? = null
                 var downloaded = false
@@ -91,13 +99,44 @@ class DownloadService : Service() {
                     return@launch
                 }
 
-                AppDatabase.getDatabase(applicationContext).historyDao()
-                    .insert(HistoryItem(title = title, platform = detectPlatform(url), url = url))
-                toast("Download concluído: $title")
+                val output = dir.listFiles()
+                    ?.filter { file ->
+                        file.isFile && !file.name.endsWith(".part", true) &&
+                            !file.name.endsWith(".ytdl", true) &&
+                            !file.name.endsWith(".jpg", true) &&
+                            !file.name.endsWith(".webp", true)
+                    }
+                    ?.maxByOrNull { it.lastModified() }
+                if (output == null) {
+                    toast("Baixou, mas não foi possível salvar na galeria")
+                    return@launch
+                }
+
+                val savedUri = try {
+                    saveToPublicFolder(output, audio)
+                } catch (_: Throwable) {
+                    null
+                }
+                if (savedUri == null) {
+                    toast("Baixou, mas não foi possível salvar na galeria")
+                } else {
+                    output.delete()
+                    toast(if (audio) "Salvo em Músicas/SalveMidia" else "Salvo em Filmes/SalveMidia")
+                }
+
+                try {
+                    AppDatabase.getDatabase(applicationContext).historyDao()
+                        .insert(HistoryItem(title = title, platform = detectPlatform(url), url = url))
+                } catch (_: Throwable) {
+                }
+                val finalNotification = buildFinalNotification(title, savedUri, audio)
+                stopForeground(STOP_FOREGROUND_DETACH)
+                nm.notify(notifId, finalNotification)
+                keepFinalNotification = true
             } catch (e: Exception) {
                 toast("Erro: ${e.message?.take(150) ?: "falha no download"}")
             } finally {
-                stopForeground(STOP_FOREGROUND_REMOVE)
+                if (!keepFinalNotification) stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf(startId)
             }
         }
@@ -116,7 +155,7 @@ class DownloadService : Service() {
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
-            val ch = NotificationChannel("downloads", "Downloads", NotificationManager.IMPORTANCE_LOW)
+            val ch = NotificationChannel("downloads", "Downloads", NotificationManager.IMPORTANCE_DEFAULT)
             (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(ch)
         }
     }
@@ -130,6 +169,81 @@ class DownloadService : Service() {
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .build()
+
+    private fun buildFinalNotification(title: String, uri: Uri?, audio: Boolean): Notification {
+        val builder = NotificationCompat.Builder(this, "downloads")
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setContentTitle("Download concluído: $title")
+            .setContentText(if (uri != null) "Toque para abrir" else "Arquivo salvo na pasta privada")
+            .setProgress(0, 0, false)
+            .setOngoing(false)
+            .setAutoCancel(true)
+        if (uri != null) {
+            val openIntent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, if (audio) contentResolver.getType(uri) ?: "audio/*" else "video/*")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val pendingIntent = PendingIntent.getActivity(
+                this, uri.hashCode(), openIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.setContentIntent(pendingIntent)
+        }
+        return builder.build()
+    }
+
+    private fun saveToPublicFolder(source: File, audio: Boolean): Uri? {
+        val relativeDirectory = if (audio) Environment.DIRECTORY_MUSIC else Environment.DIRECTORY_MOVIES
+        val folderName = "$relativeDirectory/SalveMidia"
+        if (Build.VERSION.SDK_INT >= 29) {
+            val extension = source.extension.lowercase()
+            val mimeType = when (extension) {
+                "mp3" -> "audio/mpeg"
+                "m4a" -> "audio/mp4"
+                "mp4" -> "video/mp4"
+                else -> if (audio) "audio/*" else "video/*"
+            }
+            val collection = if (audio) MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                else MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, source.name)
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, folderName)
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            val uri = contentResolver.insert(collection, values) ?: return null
+            try {
+                contentResolver.openOutputStream(uri)?.use { output ->
+                    FileInputStream(source).use { input -> input.copyTo(output) }
+                } ?: throw IllegalStateException("Não foi possível abrir destino")
+                val ready = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
+                contentResolver.update(uri, ready, null, null)
+                return uri
+            } catch (error: Throwable) {
+                contentResolver.delete(uri, null, null)
+                throw error
+            }
+        }
+        val publicDirectory = File(
+            Environment.getExternalStoragePublicDirectory(relativeDirectory), "SalveMidia"
+        ).apply { mkdirs() }
+        val destination = File(publicDirectory, source.name)
+        FileInputStream(source).use { input ->
+            FileOutputStream(destination).use { output -> input.copyTo(output) }
+        }
+        val mimeType = if (audio) {
+            if (source.extension.equals("m4a", true)) "audio/mp4" else "audio/mpeg"
+        } else "video/mp4"
+        val collection = if (audio) MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+            else MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DATA, destination.absolutePath)
+            put(MediaStore.MediaColumns.DISPLAY_NAME, destination.name)
+            put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+        }
+        return contentResolver.insert(collection, values)
+            ?: throw IllegalStateException("Não foi possível registrar o arquivo")
+    }
 
     companion object {
         fun detectPlatform(url: String): String = when {
