@@ -59,25 +59,34 @@ class DownloadService : Service() {
                 var lastError: Exception? = null
                 var downloaded = false
 
-                for (client in clients) {
+                fun makeRequest(client: String?, includeFormat: Boolean): YoutubeDLRequest {
                     val req = YoutubeDLRequest(url)
-                    req.addOption("--extractor-args", "youtube:player_client=$client")
+                    if (client != null) {
+                        req.addOption("--extractor-args", "youtube:player_client=$client")
+                    }
                     req.addOption("--no-check-certificates")
                     req.addOption("--retries", "3")
                     req.addOption("-o", dir.absolutePath + "/%(title).80s.%(ext)s")
                     req.addOption("--no-playlist")
                     if (audio) {
+                        if (includeFormat) req.addOption("-f", "ba/bestaudio/best")
                         req.addOption("-x")
                         req.addOption("--audio-format", "mp3")
                         req.addOption("--embed-thumbnail")
                         req.addOption("--convert-thumbnails", "jpg")
                         req.addOption("--add-metadata")
                     } else {
-                        req.addOption("-f", "bestvideo[height<=$quality]+bestaudio/best[height<=$quality]/best")
+                        if (includeFormat) {
+                            req.addOption("-f", "bv*[height<=$quality]+ba/b[height<=$quality]/bv*+ba/b/best")
+                        }
                         req.addOption("--merge-output-format", "mp4")
                     }
+                    return req
+                }
 
+                for (client in clients) {
                     try {
+                        val req = makeRequest(client, true)
                         YoutubeDL.getInstance().execute(req, "dl$startId") { progress, _, _ ->
                             nm.notify(notifId, buildNotification(title, progress.toInt().coerceIn(0, 100), "${progress.toInt()}%"))
                         }
@@ -89,7 +98,19 @@ class DownloadService : Service() {
                 }
 
                 if (!downloaded) {
-                    val errorMessage = lastError?.message ?: "Falha no download"
+                    try {
+                        val req = makeRequest(null, false)
+                        YoutubeDL.getInstance().execute(req, "dl$startId") { progress, _, _ ->
+                            nm.notify(notifId, buildNotification(title, progress.toInt().coerceIn(0, 100), "${progress.toInt()}%"))
+                        }
+                        downloaded = true
+                    } catch (e: Exception) {
+                        lastError = e
+                    }
+                }
+
+                if (!downloaded) {
+                    val errorMessage = lastError?.toString() ?: "Falha no download"
                     File(getExternalFilesDir(null), "erro_download.txt").writeText(errorMessage)
                     val lastUsefulLine = errorMessage.lineSequence()
                         .map { it.trim() }
